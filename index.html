@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bookshelf</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Nunito:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0c0910; color: #f0eaf8; font-family: 'Nunito', sans-serif; min-height: 100vh; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0c0910; }
+    ::-webkit-scrollbar-thumb { background: #2e2040; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #4d3468; }
+
+    /* ── Responsive helpers ─────────────────────────────────── */
+    .header-inner { max-width: 760px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; }
+    .header-title { font-family: 'Cormorant Garamond', serif; font-size: 28px; font-weight: 600; margin: 0; color: #f0eaf8; letter-spacing: -.3px; }
+    .header-eyebrow { font-size: 10px; letter-spacing: .16em; color: #4d3a5e; text-transform: uppercase; margin-bottom: 3px; }
+    .add-btn-label { display: inline; }
+    .main-pad { max-width: 760px; margin: 0 auto; padding: 28px 20px; position: relative; z-index: 1; display: flex; gap: 20px; align-items: flex-start; }
+    .shelf-tabs { display: flex; flex-direction: column; gap: 6px; position: sticky; top: 90px; flex-shrink: 0; width: 130px; }
+    .shelf-content { flex: 1; min-width: 0; }
+    .reading-cover { width: 90px; min-width: 90px; height: 134px; }
+    .reading-title { font-size: 20px; }
+    .reading-card-pad { padding: 16px; gap: 16px; }
+    .spine-w { width: 30px; height: 130px; }
+    .spine-text { font-size: 9px; max-height: 114px; }
+    .sheet-pad { padding: 18px 18px 0; }
+    .sheet-content-pad { padding: 14px 18px 20px; }
+    .detail-pad { padding: 20px; }
+
+    @media (max-width: 480px) {
+      .header-title { font-size: 22px; }
+      .header-eyebrow { display: none; }
+      .add-btn-label { display: none; }
+      .main-pad { padding: 14px 10px; flex-direction: column; gap: 12px; }
+      .shelf-tabs { flex-direction: row; width: 100%; position: static; flex-wrap: wrap; gap: 6px; }
+      .reading-cover { width: 72px; min-width: 72px; height: 108px; }
+      .reading-title { font-size: 17px; }
+      .reading-card-pad { padding: 12px; gap: 12px; }
+      .spine-w { width: 26px; height: 112px; }
+      .spine-text { font-size: 8px; max-height: 98px; }
+      .sheet-pad { padding: 14px 14px 0; }
+      .sheet-content-pad { padding: 12px 14px 18px; }
+      .detail-pad { padding: 14px; }
+
+      /* Larger tap targets on mobile */
+      button { min-height: 36px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // ── Storage ──────────────────────────────────────────────────────────────
+    const STORAGE_KEY = 'bookshelf-v1';
+    function loadBooks() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+      catch { return []; }
+    }
+    function saveBooks(books) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(books));
+    }
+
+    // ── Google Books ─────────────────────────────────────────────────────────
+    async function searchGoogleBooks(q) {
+      const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=12&key=AIzaSyCZq1vPM1gIVh7a36AlcSn0VY7qVwoP178`);
+      const data = await res.json();
+      return data.items || [];
+    }
+    function cleanCover(url) {
+      if (!url) return null;
+      return url.replace('http://', 'https://').replace('&edge=curl', '').replace('zoom=1', 'zoom=2');
+    }
+    function bookFromGoogle(item, shelf = 'want') {
+      const v = item.volumeInfo || {};
+      return {
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+        title: v.title || 'Unknown Title',
+        author: v.authors?.[0] || 'Unknown',
+        cover: cleanCover(v.imageLinks?.thumbnail),
+        totalPages: v.pageCount || null,
+        currentPage: 0, rating: 0, shelf,
+        dateAdded: new Date().toISOString(),
+        description: v.description || null,
+        genres: v.categories || [],
+        publishedYear: v.publishedDate?.slice(0, 4) || null,
+      };
+    }
+
+    // ── Spine colours ─────────────────────────────────────────────────────────
+
+    // HSL → RGB conversion used to produce spine bg/fg colour pairs.
+    function hslToRgb(h, s, l) {
+      h /= 360; s /= 100; l /= 100;
+      if (s === 0) {
+        const v = Math.round(l * 255);
+        return [v, v, v];
+      }
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      const hue2rgb = (t) => {
+        if (t < 0) t += 1; if (t > 1) t -= 1;
+        if (t < 1/6) return p + (q - p) * 6 * t;
+        if (t < 1/2) return q;
+        if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+        return p;
+      };
+      return [
+        Math.round(hue2rgb(h + 1/3) * 255),
+        Math.round(hue2rgb(h)       * 255),
+        Math.round(hue2rgb(h - 1/3) * 255),
+      ];
+    }
+
+    // Given a fraction 0–1 across a shelf row, return a { bg, fg } colour pair.
+    // Hue sweeps 0→300° (red → violet) so the arc feels like a full rainbow
+    // without the jarring wrap back to red. Both bg and fg are clamped to the
+    // app's dark, moody palette band (bg: ~23% lightness, fg: ~78% lightness).
+    function rainbowColor(fraction) {
+      const h = fraction * 300;
+      const [br, bg2, bb] = hslToRgb(h, 55, 23);
+      const [fr, fg2, fb] = hslToRgb(h, 38, 78);
+      return {
+        bg: `rgb(${br},${bg2},${bb})`,
+        fg: `rgb(${fr},${fg2},${fb})`,
+      };
+    }
+
+    const SHELVES = [
+      { key: 'reading', label: 'Currently Reading', accent: '#c47d9b' },
+      { key: 'want',    label: 'Want to Read',       accent: '#e8c07a' },
+      { key: 'read',    label: 'Read',               accent: '#9980d4' },
+    ];
+
+    // ── Shared styles ─────────────────────────────────────────────────────────
+    const INPUT_STYLE = {
+      width: '100%', background: '#100c18', border: '1px solid #2e2040',
+      borderRadius: 8, padding: '9px 12px', color: '#f0eaf8',
+      fontSize: 14, fontFamily: "'Nunito', sans-serif", outline: 'none',
+    };
+    const OVERLAY_STYLE = {
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,.78)', zIndex: 200,
+      display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+    };
+    const SHEET_STYLE = {
+      background: '#0e0b16', border: '1px solid #2e2040',
+      borderRadius: '16px 16px 0 0', width: '100%', maxWidth: 700,
+      maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+    };
+
+    // ── Icons (inline SVG so no icon library needed) ──────────────────────────
+    const Icon = {
+      Plus: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+      X: ({size=18}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+      Search: () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+      Book: () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4d3468" strokeWidth="1.5" strokeLinecap="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>,
+      BookSm: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4d3468" strokeWidth="1.5" strokeLinecap="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>,
+      ChevronRight: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4d3a5e" strokeWidth="2" strokeLinecap="round"><polyline points="9 18 15 12 9 6"/></svg>,
+      Trash: () => <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>,
+      Back: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6"/></svg>,
+      Bookmark: () => <svg width="13" height="13" viewBox="0 0 24 24" fill="#c47d9b" stroke="#c47d9b" strokeWidth="2" strokeLinecap="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>,
+      Star: ({filled, size=14}) => <svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? '#e8c07a' : 'none'} stroke={filled ? '#e8c07a' : '#3d2f52'} strokeWidth="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>,
+    };
+
+    // ── Stars ─────────────────────────────────────────────────────────────────
+    function Stars({ val, onChange, size = 14 }) {
+      const [hov, setHov] = useState(0);
+      return (
+        <div style={{ display: 'flex', gap: 3 }}>
+          {[1,2,3,4,5].map(n => (
+            <span key={n}
+              onMouseEnter={() => onChange && setHov(n)}
+              onMouseLeave={() => onChange && setHov(0)}
+              onClick={() => onChange && onChange(n === val ? 0 : n)}
+              style={{ cursor: onChange ? 'pointer' : 'default', transition: 'all .1s', display: 'flex' }}>
+              <Icon.Star filled={(hov || val) >= n} size={size} />
+            </span>
+          ))}
+        </div>
+      );
+    }
+
+    function GenrePill({ label }) {
+      return (
+        <span style={{ fontSize: 10, background: '#2e2040', color: '#9980d4',
+          padding: '2px 9px', borderRadius: 20, whiteSpace: 'nowrap' }}>{label}</span>
+      );
+    }
+
+    // ── Reading card (Currently Reading shelf) ────────────────────────────────
+    function ReadingCard({ book, onClick }) {
+      const [hov, setHov] = useState(false);
+      const pct = book.totalPages > 0
+        ? Math.min(100, Math.round((book.currentPage || 0) / book.totalPages * 100)) : 0;
+      return (
+        <div onClick={() => onClick(book)}
+          onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+          className="reading-card-pad"
+          style={{
+            background: hov ? '#1c1528' : '#170f22',
+            border: `1px solid ${hov ? '#4d3468' : '#2e2040'}`,
+            borderLeft: '3px solid #c47d9b', borderRadius: 12,
+            cursor: 'pointer', display: 'flex',
+            transition: 'all .2s ease',
+            boxShadow: hov ? '0 8px 24px rgba(0,0,0,.4)' : 'none',
+          }}>
+          <div className="reading-cover" style={{ borderRadius: 5, overflow: 'hidden',
+            background: '#1c1530', flexShrink: 0, boxShadow: '3px 5px 14px rgba(0,0,0,.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {book.cover
+              ? <img src={book.cover} alt={book.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <Icon.Book />}
+          </div>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+            <div>
+              <div className="reading-title" style={{ fontFamily: "'Cormorant Garamond', serif", fontWeight: 600,
+                color: '#f0eaf8', lineHeight: 1.2, marginBottom: 4,
+                overflow: 'hidden', textOverflow: 'ellipsis',
+                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{book.title}</div>
+              <div style={{ fontSize: 12, color: '#9987ab', marginBottom: 8 }}>
+                {book.author}{book.publishedYear ? ` · ${book.publishedYear}` : ''}
+              </div>
+              {book.genres?.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+                  {book.genres.slice(0, 3).map((g, i) => <GenrePill key={i} label={g} />)}
+                </div>
+              )}
+              {book.description && (
+                <div style={{ fontSize: 12, color: '#7a6a8a', lineHeight: 1.55, fontStyle: 'italic',
+                  overflow: 'hidden', textOverflow: 'ellipsis',
+                  display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                  {book.description}
+                </div>
+              )}
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                <span style={{ fontSize: 11, color: '#6a5a7a' }}>progress</span>
+                <span style={{ fontSize: 11, color: '#c47d9b', fontWeight: 700 }}>{pct}%</span>
+              </div>
+              <div style={{ height: 3, background: '#2e2040', borderRadius: 4 }}>
+                <div style={{ height: '100%', width: `${pct}%`,
+                  background: 'linear-gradient(90deg, #c47d9b, #9980d4)',
+                  borderRadius: 4, transition: 'width .5s ease' }} />
+              </div>
+              {book.totalPages > 0 && (
+                <div style={{ fontSize: 10, color: '#4d3a5e', marginTop: 3 }}>
+                  {book.currentPage || 0} / {book.totalPages} pages
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Spine ─────────────────────────────────────────────────────────────────
+    function Spine({ book, onClick, rainbowFraction }) {
+      const [hov, setHov] = useState(false);
+      const { bg, fg } = rainbowColor(rainbowFraction ?? 0);
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer' }}
+          onClick={() => onClick(book)}>
+          <div onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+            className="spine-w"
+            style={{
+              background: bg, borderRadius: '2px 2px 0 0',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              position: 'relative', overflow: 'hidden',
+              transform: hov ? 'translateY(-7px)' : 'none',
+              boxShadow: hov ? '0 10px 20px rgba(0,0,0,.55)' : '2px 0 6px rgba(0,0,0,.3)',
+              transition: 'transform .2s ease, box-shadow .2s ease',
+            }}>
+            <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4,
+              background: 'rgba(255,255,255,.12)' }} />
+            <div className="spine-text" style={{
+              writingMode: 'vertical-rl', transform: 'rotate(180deg)',
+              fontWeight: 700, color: fg, fontFamily: "'Nunito', sans-serif",
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              padding: '0 5px', letterSpacing: '.05em',
+            }}>{book.title}</div>
+          </div>
+          {book.shelf === 'read' && book.rating > 0 && (
+            <div style={{ marginTop: 5 }}><Stars val={book.rating} size={7} /></div>
+          )}
+        </div>
+      );
+    }
+
+    // ── Search result row ─────────────────────────────────────────────────────
+    function SearchResultRow({ item, onSelect }) {
+      const [hov, setHov] = useState(false);
+      const v = item.volumeInfo || {};
+      const cover = cleanCover(v.imageLinks?.thumbnail);
+      return (
+        <div onClick={() => onSelect(item)}
+          onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+          style={{ display: 'flex', gap: 12, padding: '10px 8px', borderRadius: 8, cursor: 'pointer',
+            background: hov ? '#1c1528' : 'transparent', transition: 'background .15s' }}>
+          <div style={{ width: 36, minWidth: 36, height: 54, borderRadius: 3, overflow: 'hidden',
+            background: '#1c1528', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {cover
+              ? <img src={cover} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <Icon.BookSm />}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#f0eaf8', lineHeight: 1.3,
+              fontFamily: "'Cormorant Garamond', serif" }}>{v.title}</div>
+            <div style={{ fontSize: 11, color: '#9987ab', marginTop: 1 }}>{v.authors?.[0] || 'Unknown'}</div>
+            {v.categories?.length > 0 &&
+              <div style={{ fontSize: 10, color: '#6a5a7a', marginTop: 2 }}>{v.categories[0]}</div>}
+          </div>
+          <div style={{ fontSize: 10, color: '#c47d9b', border: '1px solid rgba(196,125,155,.3)',
+            borderRadius: 20, padding: '2px 10px', alignSelf: 'center', flexShrink: 0 }}>add</div>
+        </div>
+      );
+    }
+
+    // ── Sort helpers ──────────────────────────────────────────────────────────
+    const SORT_OPTS = [
+      { key: 'author',     label: 'Author' },
+      { key: 'title',      label: 'Title'  },
+      { key: 'added-desc', label: 'Newest' },
+      { key: 'added-asc',  label: 'Oldest' },
+    ];
+    function sortBooks(books, key) {
+      const s = [...books];
+      if (key === 'added-desc') return s.sort((a,b) => new Date(b.dateAdded) - new Date(a.dateAdded));
+      if (key === 'added-asc')  return s.sort((a,b) => new Date(a.dateAdded) - new Date(b.dateAdded));
+      if (key === 'title')      return s.sort((a,b) => a.title.localeCompare(b.title));
+      if (key === 'author')     return s.sort((a,b) => a.author.localeCompare(b.author) || (a.publishedYear || 9999) - (b.publishedYear || 9999));
+      return s;
+    }
+
+    // ── ShelfRows: splits spines into rows, each with its own plank ───────────
+    function ShelfRows({ books, onBookClick, sortKey }) {
+      const containerRef = useRef(null);
+      const [mobile, setMobile] = useState(false);
+
+      useEffect(() => {
+        if (!containerRef.current) return;
+        const ro = new ResizeObserver(entries => {
+          setMobile(entries[0].contentRect.width < 480);
+        });
+        ro.observe(containerRef.current);
+        return () => ro.disconnect();
+      }, []);
+
+      // Static values chosen so spines fill the shelf exactly:
+      // Desktop: 30px spine + 3px gap × 20 = 660px (700px max-width − 20px padding each side)
+      // Mobile:  26px spine + 2px gap × 13 = 364px (fits within 362px content at 14px padding)
+      const perRow = mobile ? 13 : 20;
+      const gap    = mobile ? 2  : 3;
+
+      // In author view each author gets its own rainbow arc (0→1 within their
+      // group). All other views spread the arc across each row by position.
+      const fractions = (() => {
+        if (sortKey !== 'author') return null;
+        const result = new Array(books.length);
+        let i = 0;
+        while (i < books.length) {
+          let j = i;
+          while (j < books.length && books[j].author === books[i].author) j++;
+          const groupSize = j - i;
+          for (let k = 0; k < groupSize; k++) {
+            result[i + k] = groupSize > 1 ? k / (groupSize - 1) : 0;
+          }
+          i = j;
+        }
+        return result;
+      })();
+
+      const rows = [];
+      for (let i = 0; i < books.length; i += perRow) rows.push(books.slice(i, i + perRow));
+
+      const Plank = () => (
+        <div style={{ position: 'relative', height: 11, background: '#221830',
+          borderRadius: '0 0 4px 4px', boxShadow: '0 5px 12px rgba(0,0,0,.45)' }}>
+          <div style={{ height: 2, background: '#3d2f52' }} />
+          <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: 6,
+            background: 'rgba(0,0,0,.35)', borderRadius: '0 0 0 4px' }} />
+          <div style={{ position: 'absolute', top: 0, bottom: 0, right: 0, width: 6,
+            background: 'rgba(0,0,0,.35)', borderRadius: '0 0 4px 0' }} />
+        </div>
+      );
+
+      return (
+        <div ref={containerRef}>
+          {rows.map((row, ri) => {
+            const isLastRow = ri === rows.length - 1;
+            const isFull = row.length === perRow;
+            const globalOffset = ri * perRow;
+            return (
+              <div key={ri} style={{ marginBottom: !isLastRow ? 18 : 0 }}>
+                <div style={{
+                  display: 'flex', alignItems: 'flex-end',
+                  justifyContent: (!isLastRow || isFull) ? 'space-between' : 'flex-start',
+                  gap: (!isLastRow || isFull) ? 0 : gap,
+                }}>
+                  {row.map((b, i) => {
+                    const fraction = fractions
+                      ? fractions[globalOffset + i]
+                      : (perRow > 1 ? i / (perRow - 1) : 0);
+                    return (
+                      <Spine
+                        key={b.id}
+                        book={b}
+                        onClick={onBookClick}
+                        rainbowFraction={fraction}
+                      />
+                    );
+                  })}
+                </div>
+                <Plank />
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // ── SortBar ───────────────────────────────────────────────────────────────
+    function SortBar({ value, onChange, accent }) {
+      return (
+        <div style={{ display: 'flex', gap: 5, marginBottom: 14, flexWrap: 'wrap' }}>
+          {SORT_OPTS.map(({ key, label }) => {
+            const active = value === key;
+            return (
+              <button key={key} onClick={() => onChange(key)}
+                style={{
+                  background: active ? accent + '22' : 'transparent',
+                  border: `1px solid ${active ? accent : '#2e2040'}`,
+                  color: active ? accent : '#4d3a5e',
+                  borderRadius: 20, padding: '3px 11px',
+                  fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                  fontFamily: "'Nunito', sans-serif", transition: 'all .15s',
+                  lineHeight: 1.6,
+                }}>{label}</button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // ── AuthorShelfGroup: per-author sub-shelves inside TBR / Read ───────────
+    // Authors with >= threshold books get their own named shelf.
+    // Authors with fewer books are pooled onto a single "& others" shelf.
+    function AuthorShelfGroup({ books, onBookClick, sortKey, accent, threshold = 4 }) {
+      const seen = {};
+      books.forEach(b => {
+        const key = b.author || 'Unknown';
+        if (!seen[key]) seen[key] = [];
+        seen[key].push(b);
+      });
+
+      const dedicated = [];
+      const misc = [];
+      // Preserve the order authors first appear in the sorted book list
+      const authorOrder = [];
+      books.forEach(b => {
+        const key = b.author || 'Unknown';
+        if (!authorOrder.includes(key)) authorOrder.push(key);
+      });
+      authorOrder.forEach(key => {
+        if (seen[key].length >= threshold) dedicated.push({ author: key, items: seen[key] });
+        else misc.push(...seen[key]);
+      });
+
+      if (dedicated.length === 0 && misc.length === 0) return null;
+
+      const AuthorLabel = ({ label, count }) => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <div style={{ height: 1, width: 10, background: accent + '55', flexShrink: 0 }} />
+          <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 14,
+            fontStyle: 'italic', color: accent, whiteSpace: 'nowrap', opacity: 0.85 }}>
+            {label}
+          </span>
+          <div style={{ flex: 1, height: 1, background: accent + '22' }} />
+          <span style={{ fontSize: 10, color: '#3d2f52', flexShrink: 0 }}>{count}</span>
+        </div>
+      );
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+          {dedicated.map(({ author, items }) => (
+            <div key={author}>
+              <AuthorLabel label={author} count={items.length} />
+              <ShelfRows books={items} onBookClick={onBookClick} sortKey={sortKey} />
+            </div>
+          ))}
+          {misc.length > 0 && (
+            <div>
+              <AuthorLabel label="Miscellaneous" count={misc.length} />
+              <ShelfRows books={misc} onBookClick={onBookClick} sortKey={sortKey} />
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── App ───────────────────────────────────────────────────────────────────
+    function App() {
+      const [books, setBooks]         = useState(() => loadBooks());
+      const [showAdd, setShowAdd]     = useState(false);
+      const [tab, setTab]             = useState('search');
+      const [query, setQuery]         = useState('');
+      const [results, setResults]     = useState([]);
+      const [searching, setSearching] = useState(false);
+      const [pending, setPending]     = useState(null);
+      const [detail, setDetail]       = useState(null);
+      const [manShelf, setManShelf]   = useState('want');
+      const [manual, setManual]       = useState({ title: '', author: '', pages: '' });
+      const [sortWant, setSortWant]   = useState('author');
+      const [sortRead, setSortRead]   = useState('author');
+      const [activeShelf, setActiveShelf] = useState('reading');
+      const debounce = useRef(null);
+
+      useEffect(() => { saveBooks(books); }, [books]);
+
+      useEffect(() => {
+        if (!query.trim()) { setResults([]); return; }
+        clearTimeout(debounce.current);
+        debounce.current = setTimeout(async () => {
+          setSearching(true);
+          try { setResults(await searchGoogleBooks(query)); }
+          catch { setResults([]); }
+          setSearching(false);
+        }, 450);
+        return () => clearTimeout(debounce.current);
+      }, [query]);
+
+      const updateBook = (id, patch) => {
+        setBooks(bs => bs.map(b => b.id === id ? { ...b, ...patch } : b));
+        setDetail(d => d?.id === id ? { ...d, ...patch } : d);
+      };
+
+      const confirmAdd = (shelf) => {
+        if (!pending) return;
+        setBooks(bs => [...bs, bookFromGoogle(pending, shelf)]);
+        setPending(null); setQuery(''); setResults([]); setShowAdd(false);
+      };
+
+      const addManual = () => {
+        if (!manual.title.trim()) return;
+        setBooks(bs => [...bs, {
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+          title: manual.title.trim(), author: manual.author.trim() || 'Unknown',
+          cover: null, totalPages: parseInt(manual.pages) || null,
+          currentPage: 0, rating: 0, shelf: manShelf,
+          dateAdded: new Date().toISOString(),
+          description: null, genres: [], publishedYear: null,
+        }]);
+        setManual({ title: '', author: '', pages: '' });
+        setShowAdd(false);
+      };
+
+      const closeAdd = () => { setShowAdd(false); setPending(null); };
+
+      const reading     = books.filter(b => b.shelf === 'reading');
+      const want        = sortBooks(books.filter(b => b.shelf === 'want'), sortWant);
+      const read        = sortBooks(books.filter(b => b.shelf === 'read'), sortRead);
+
+      return (
+        <div style={{ minHeight: '100vh', background: '#0c0910', color: '#f0eaf8', fontFamily: "'Nunito', sans-serif" }}>
+
+          {/* Ambient glow */}
+          <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0,
+            background: 'radial-gradient(ellipse at 15% 0%, rgba(196,125,155,.07) 0%, transparent 50%), radial-gradient(ellipse at 85% 100%, rgba(153,128,212,.05) 0%, transparent 55%)' }} />
+
+          {/* Header */}
+          <div style={{ position: 'sticky', top: 0, zIndex: 100,
+            background: 'rgba(12,9,16,.95)', backdropFilter: 'blur(14px)',
+            borderBottom: '1px solid #1e1528', padding: '15px 20px' }}>
+            <div className="header-inner">
+              <div>
+                <div className="header-eyebrow">my library</div>
+                <h1 className="header-title">
+                  Bookshelf<span style={{ color: '#c47d9b' }}>.</span>
+                </h1>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                {read.length > 0 && (
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 24,
+                      fontWeight: 600, color: '#e8c07a', lineHeight: 1 }}>{read.length}</div>
+                    <div style={{ fontSize: 10, color: '#4d3a5e', letterSpacing: '.06em' }}>read</div>
+                  </div>
+                )}
+                <button onClick={() => { setShowAdd(true); setPending(null); setQuery(''); setResults([]); }}
+                  onMouseEnter={e => e.currentTarget.style.opacity = '.82'}
+                  onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+                  style={{ background: '#c47d9b', color: '#0c0910', border: 'none', borderRadius: 20,
+                    padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 5, fontFamily: "'Nunito', sans-serif" }}>
+                  <Icon.Plus /> <span className="add-btn-label">Add Book</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Main */}
+          <div className="main-pad">
+
+          {/* Tab nav + shelf content */}
+          <nav className="shelf-tabs">
+            {[
+              { key: 'reading', label: 'Reading',  accent: '#c47d9b', count: reading.length },
+              { key: 'want',    label: 'Want to Read', accent: '#e8c07a', count: want.length },
+              { key: 'read',    label: 'Read',      accent: '#9980d4', count: read.length },
+            ].map(({ key, label, accent, count }) => {
+              const active = activeShelf === key;
+              return (
+                <button key={key} onClick={() => setActiveShelf(key)}
+                  style={{
+                    background: active ? accent + '18' : 'transparent',
+                    border: `1px solid ${active ? accent + '55' : '#2e2040'}`,
+                    borderLeft: `3px solid ${active ? accent : 'transparent'}`,
+                    borderRadius: 8, padding: '10px 12px',
+                    color: active ? accent : '#4d3a5e',
+                    fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                    fontFamily: "'Nunito', sans-serif", transition: 'all .18s',
+                    textAlign: 'left', width: '100%',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  }}>
+                  <span>{label}</span>
+                  <span style={{ fontSize: 11, opacity: active ? 0.8 : 0.5 }}>{count}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="shelf-content">
+            {/* Currently Reading */}
+            {activeShelf === 'reading' && (
+              <section>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                  <Icon.Bookmark />
+                  <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 600, color: '#c47d9b' }}>
+                    Currently Reading
+                  </span>
+                </div>
+                {reading.length === 0
+                  ? <div style={{ textAlign: 'center', padding: '26px 0', color: '#3d2f52',
+                      fontSize: 14, fontStyle: 'italic', fontFamily: "'Cormorant Garamond', serif" }}>
+                      nothing on the go right now
+                    </div>
+                  : <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      {reading.map(b => <ReadingCard key={b.id} book={b} onClick={setDetail} />)}
+                    </div>}
+              </section>
+            )}
+
+            {/* Want to Read */}
+            {activeShelf === 'want' && (
+              <section>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                  <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 600, color: '#e8c07a' }}>
+                    Want to Read
+                  </span>
+                </div>
+                {want.length === 0
+                  ? <div style={{ textAlign: 'center', padding: '26px 0', color: '#3d2f52',
+                      fontSize: 14, fontStyle: 'italic', fontFamily: "'Cormorant Garamond', serif" }}>
+                      your tbr is empty — for now
+                    </div>
+                  : <>
+                      <SortBar value={sortWant} onChange={setSortWant} accent="#e8c07a" />
+                      <AuthorShelfGroup books={want} onBookClick={setDetail} sortKey={sortWant} accent="#e8c07a" />
+                    </>}
+              </section>
+            )}
+
+            {/* Read */}
+            {activeShelf === 'read' && (
+              <section>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                  <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 600, color: '#9980d4' }}>
+                    Read
+                  </span>
+                </div>
+                {read.length === 0
+                  ? <div style={{ textAlign: 'center', padding: '26px 0', color: '#3d2f52',
+                      fontSize: 14, fontStyle: 'italic', fontFamily: "'Cormorant Garamond', serif" }}>
+                      no finished books yet
+                    </div>
+                  : <>
+                      <SortBar value={sortRead} onChange={setSortRead} accent="#9980d4" />
+                      <AuthorShelfGroup books={read} onBookClick={setDetail} sortKey={sortRead} accent="#9980d4" />
+                    </>}
+              </section>
+            )}
+          </div>
+
+          {/* ── ADD MODAL ── */}
+          {showAdd && (
+            <div style={OVERLAY_STYLE} onClick={e => { if (e.target === e.currentTarget) closeAdd(); }}>
+              <div style={SHEET_STYLE}>
+                <div className="sheet-pad" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {pending && (
+                      <button onClick={() => setPending(null)}
+                        style={{ background: 'none', border: 'none', color: '#7a6a8a', cursor: 'pointer', display: 'flex', paddingRight: 4 }}>
+                        <Icon.Back />
+                      </button>
+                    )}
+                    <h2 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 600, margin: 0 }}>
+                      {pending ? 'add to shelf' : 'add a book'}
+                    </h2>
+                  </div>
+                  <button onClick={closeAdd} style={{ background: 'none', border: 'none', color: '#7a6a8a', cursor: 'pointer' }}>
+                    <Icon.X />
+                  </button>
+                </div>
+
+                {pending ? (
+                  <div style={{ padding: 18, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ display: 'flex', gap: 14, padding: 14, background: '#140e1a', borderRadius: 10, marginBottom: 4 }}>
+                      {cleanCover(pending.volumeInfo?.imageLinks?.thumbnail) && (
+                        <div style={{ width: 58, minWidth: 58, height: 86, borderRadius: 4, overflow: 'hidden',
+                          flexShrink: 0, boxShadow: '2px 4px 10px rgba(0,0,0,.45)' }}>
+                          <img src={cleanCover(pending.volumeInfo.imageLinks.thumbnail)} alt=""
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        </div>
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 16, fontWeight: 600,
+                          color: '#f0eaf8', lineHeight: 1.3 }}>{pending.volumeInfo?.title}</div>
+                        <div style={{ fontSize: 12, color: '#9987ab', margin: '3px 0 6px' }}>{pending.volumeInfo?.authors?.[0]}</div>
+                        {pending.volumeInfo?.categories?.length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+                            {pending.volumeInfo.categories.slice(0, 3).map((g, i) => <GenrePill key={i} label={g} />)}
+                          </div>
+                        )}
+                        {pending.volumeInfo?.description && (
+                          <div style={{ fontSize: 11, color: '#6a5a7a', lineHeight: 1.55, fontStyle: 'italic',
+                            overflow: 'hidden', textOverflow: 'ellipsis',
+                            display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' }}>
+                            {pending.volumeInfo.description}
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 12, marginTop: 6 }}>
+                          {pending.volumeInfo?.pageCount &&
+                            <span style={{ fontSize: 10, color: '#4d3a5e' }}>{pending.volumeInfo.pageCount} pages</span>}
+                          {pending.volumeInfo?.publishedDate &&
+                            <span style={{ fontSize: 10, color: '#4d3a5e' }}>{pending.volumeInfo.publishedDate.slice(0, 4)}</span>}
+                        </div>
+                      </div>
+                    </div>
+                    {SHELVES.map(({ key, label, accent }) => (
+                      <button key={key} onClick={() => confirmAdd(key)}
+                        onMouseEnter={e => { e.currentTarget.style.borderColor = accent + '55'; e.currentTarget.style.background = accent + '12'; }}
+                        onMouseLeave={e => { e.currentTarget.style.borderColor = '#2e2040'; e.currentTarget.style.background = '#140e1a'; }}
+                        style={{ background: '#140e1a', border: '1px solid #2e2040', borderRadius: 10,
+                          padding: '13px 16px', color: '#f0eaf8', cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          fontFamily: "'Nunito', sans-serif", fontSize: 14, fontWeight: 600,
+                          transition: 'all .15s', textAlign: 'left' }}>
+                        <span style={{ width: 9, height: 9, borderRadius: '50%', background: accent, flexShrink: 0 }} />
+                        {label}
+                        <span style={{ marginLeft: 'auto' }}><Icon.ChevronRight /></span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', paddingTop: 14, paddingLeft: 18, paddingRight: 18 }}>
+                      {[['search', 'Search'], ['manual', 'Add Manually']].map(([t, l]) => (
+                        <button key={t} onClick={() => setTab(t)}
+                          style={{ background: 'none', border: 'none',
+                            borderBottom: `2px solid ${tab === t ? '#c47d9b' : 'transparent'}`,
+                            color: tab === t ? '#c47d9b' : '#4d3a5e',
+                            padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                            fontFamily: "'Nunito', sans-serif", transition: 'all .15s' }}>{l}</button>
+                      ))}
+                    </div>
+                    <div className="sheet-content-pad" style={{ flex: 1, overflow: 'auto' }}>
+                      {tab === 'search' ? (
+                        <>
+                          <div style={{ position: 'relative', marginBottom: 10 }}>
+                            <span style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', display: 'flex', color: '#4d3a5e' }}>
+                              <Icon.Search />
+                            </span>
+                            <input autoFocus value={query} onChange={e => setQuery(e.target.value)}
+                              placeholder="Search by title or author…"
+                              style={{ ...INPUT_STYLE, paddingLeft: 33 }} />
+                          </div>
+                          {searching && <div style={{ textAlign: 'center', padding: 20, color: '#4d3a5e',
+                            fontSize: 13, fontStyle: 'italic' }}>searching…</div>}
+                          {!searching && results.map((item, i) =>
+                            <SearchResultRow key={item.id || i} item={item} onSelect={setPending} />)}
+                          {!searching && query && results.length === 0 &&
+                            <div style={{ textAlign: 'center', padding: 20, color: '#4d3a5e',
+                              fontSize: 13, fontStyle: 'italic' }}>no results found</div>}
+                        </>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                          {[
+                            { k: 'title',  l: 'Title *',     ph: 'Book title' },
+                            { k: 'author', l: 'Author',      ph: 'Author name' },
+                            { k: 'pages',  l: 'Total Pages', ph: 'e.g. 320', t: 'number' },
+                          ].map(({ k, l, ph, t }) => (
+                            <div key={k}>
+                              <div style={{ fontSize: 10, color: '#7a6a8a', marginBottom: 5,
+                                letterSpacing: '.08em', textTransform: 'uppercase' }}>{l}</div>
+                              <input type={t || 'text'} value={manual[k]}
+                                onChange={e => setManual(p => ({ ...p, [k]: e.target.value }))}
+                                placeholder={ph} style={INPUT_STYLE} />
+                            </div>
+                          ))}
+                          <div>
+                            <div style={{ fontSize: 10, color: '#7a6a8a', marginBottom: 6,
+                              letterSpacing: '.08em', textTransform: 'uppercase' }}>Add to Shelf</div>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              {SHELVES.map(({ key, label, accent }) => (
+                                <button key={key} onClick={() => setManShelf(key)}
+                                  style={{ flex: 1, padding: '7px 4px', borderRadius: 20,
+                                    border: `1px solid ${manShelf === key ? accent : '#2e2040'}`,
+                                    background: manShelf === key ? accent + '18' : 'transparent',
+                                    color: manShelf === key ? accent : '#4d3a5e',
+                                    fontSize: 10, fontFamily: "'Nunito', sans-serif",
+                                    fontWeight: 600, cursor: 'pointer', transition: 'all .15s' }}>{label}</button>
+                              ))}
+                            </div>
+                          </div>
+                          <button onClick={addManual} disabled={!manual.title.trim()}
+                            style={{ background: manual.title.trim() ? '#c47d9b' : '#2e2040',
+                              color: manual.title.trim() ? '#0c0910' : '#4d3a5e',
+                              border: 'none', borderRadius: 20, padding: 12, fontSize: 14,
+                              fontWeight: 700, cursor: manual.title.trim() ? 'pointer' : 'not-allowed',
+                              fontFamily: "'Nunito', sans-serif", marginTop: 4 }}>Add Book</button>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── DETAIL MODAL ── */}
+          {detail && (
+            <div style={OVERLAY_STYLE} onClick={e => { if (e.target === e.currentTarget) setDetail(null); }}>
+              <div style={{ ...SHEET_STYLE, maxHeight: '92vh', overflow: 'auto' }}>
+                <div className="detail-pad">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+                    <h2 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 18, margin: 0, fontWeight: 600 }}>
+                      book details
+                    </h2>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={() => { setBooks(bs => bs.filter(b => b.id !== detail.id)); setDetail(null); }}
+                        style={{ background: 'none', border: '1px solid #3a1820', color: '#d07070',
+                          borderRadius: 20, padding: '4px 12px', cursor: 'pointer', fontSize: 12,
+                          display: 'flex', alignItems: 'center', gap: 4, fontFamily: "'Nunito', sans-serif" }}>
+                        <Icon.Trash /> remove
+                      </button>
+                      <button onClick={() => setDetail(null)} style={{ background: 'none', border: 'none', color: '#7a6a8a', cursor: 'pointer' }}>
+                        <Icon.X size={17} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
+                    <div style={{ width: 84, minWidth: 84, height: 126, borderRadius: 6, overflow: 'hidden',
+                      background: '#1c1528', flexShrink: 0, boxShadow: '3px 5px 14px rgba(0,0,0,.55)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {detail.cover
+                        ? <img src={detail.cover} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : <Icon.Book />}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontWeight: 600,
+                        lineHeight: 1.3, marginBottom: 4 }}>{detail.title}</div>
+                      <div style={{ fontSize: 13, color: '#9987ab', marginBottom: 6 }}>
+                        {detail.author}{detail.publishedYear ? ` · ${detail.publishedYear}` : ''}
+                      </div>
+                      {detail.totalPages &&
+                        <div style={{ fontSize: 11, color: '#4d3a5e', marginBottom: 7 }}>{detail.totalPages} pages</div>}
+                      {detail.genres?.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {detail.genres.slice(0, 4).map((g, i) => <GenrePill key={i} label={g} />)}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {detail.description && (
+                    <div style={{ marginBottom: 20, padding: 14, background: '#140e1a',
+                      borderRadius: 10, borderLeft: '2px solid #2e2040' }}>
+                      <div style={{ fontSize: 10, color: '#7a6a8a', marginBottom: 7,
+                        letterSpacing: '.08em', textTransform: 'uppercase' }}>Synopsis</div>
+                      <div style={{ fontSize: 13, color: '#9987ab', lineHeight: 1.65, fontStyle: 'italic' }}>
+                        {detail.description}
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ marginBottom: 20 }}>
+                    <div style={{ fontSize: 10, color: '#7a6a8a', marginBottom: 7,
+                      letterSpacing: '.08em', textTransform: 'uppercase' }}>Shelf</div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      {SHELVES.map(({ key, label, accent }) => (
+                        <button key={key} onClick={() => updateBook(detail.id, { shelf: key })}
+                          style={{ flex: 1, padding: '7px 4px', borderRadius: 20,
+                            border: `1px solid ${detail.shelf === key ? accent : '#2e2040'}`,
+                            background: detail.shelf === key ? accent + '20' : 'transparent',
+                            color: detail.shelf === key ? accent : '#4d3a5e',
+                            fontSize: 10, fontFamily: "'Nunito', sans-serif",
+                            fontWeight: 600, cursor: 'pointer', transition: 'all .15s' }}>{label}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {detail.shelf === 'read' && (
+                    <div style={{ marginBottom: 20 }}>
+                      <div style={{ fontSize: 10, color: '#7a6a8a', marginBottom: 8,
+                        letterSpacing: '.08em', textTransform: 'uppercase' }}>Your Rating</div>
+                      <Stars val={detail.rating} size={24} onChange={r => updateBook(detail.id, { rating: r })} />
+                    </div>
+                  )}
+
+                  {detail.shelf === 'reading' && (() => {
+                    const pct = detail.totalPages > 0
+                      ? Math.min(100, Math.round((detail.currentPage || 0) / detail.totalPages * 100)) : 0;
+                    return (
+                      <div style={{ marginBottom: 20 }}>
+                        <div style={{ fontSize: 10, color: '#7a6a8a', marginBottom: 8,
+                          letterSpacing: '.08em', textTransform: 'uppercase' }}>Progress</div>
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12 }}>
+                          <input type="number" value={detail.currentPage || 0}
+                            onChange={e => updateBook(detail.id, { currentPage: Math.max(0, parseInt(e.target.value) || 0) })}
+                            style={{ width: 72, background: '#100c18', border: '1px solid #2e2040',
+                              borderRadius: 8, padding: 8, color: '#c47d9b', fontSize: 14,
+                              fontFamily: "'Nunito', sans-serif", textAlign: 'center', outline: 'none' }} />
+                          <span style={{ color: '#4d3a5e', fontSize: 13 }}>of</span>
+                          <input type="number" value={detail.totalPages || ''} placeholder="?"
+                            onChange={e => updateBook(detail.id, { totalPages: parseInt(e.target.value) || null })}
+                            style={{ width: 72, background: '#100c18', border: '1px solid #2e2040',
+                              borderRadius: 8, padding: 8, color: '#f0eaf8', fontSize: 14,
+                              fontFamily: "'Nunito', sans-serif", textAlign: 'center', outline: 'none' }} />
+                          <span style={{ color: '#4d3a5e', fontSize: 13 }}>pages</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                          <span style={{ fontSize: 11, color: '#6a5a7a' }}>progress</span>
+                          <span style={{ fontSize: 11, color: '#c47d9b', fontWeight: 700 }}>{pct}%</span>
+                        </div>
+                        <div style={{ height: 3, background: '#2e2040', borderRadius: 4 }}>
+                          <div style={{ height: '100%', width: `${pct}%`,
+                            background: 'linear-gradient(90deg, #c47d9b, #9980d4)',
+                            borderRadius: 4, transition: 'width .5s ease' }} />
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
