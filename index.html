@@ -280,6 +280,37 @@
       );
     }
 
+    // Want to Read card — like ReadingCard but smaller, no progress
+    function WantCard({ book, onClick }) {
+      const [hov, setHov] = useState(false);
+      return (
+        <div onClick={() => onClick(book)}
+          onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+          style={{
+            background: hov ? '#1c1528' : '#170f22',
+            border: '1px solid ' + (hov ? '#4d3468' : '#2e2040'),
+            borderLeft: '3px solid #e8c07a',
+            borderRadius: 10, cursor: 'pointer',
+            display: 'flex', gap: 12, padding: '11px 13px',
+            transition: 'all .2s ease',
+            boxShadow: hov ? '0 6px 18px rgba(0,0,0,.35)' : 'none',
+          }}>
+          <div style={{ width: 50, minWidth: 50, height: 74, borderRadius: 4, overflow: 'hidden', background: '#1c1530', flexShrink: 0, boxShadow: '2px 4px 10px rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {book.cover ? <img src={book.cover} alt={book.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <Icon.Book size={16} />}
+          </div>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+            <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 15, fontWeight: 600, color: '#f0eaf8', lineHeight: 1.25, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{book.title}</div>
+            <div style={{ fontSize: 11, color: '#9987ab', marginBottom: book.genres && book.genres.length > 0 ? 5 : 0 }}>{book.author}{book.publishedYear ? ' \u00b7 ' + book.publishedYear : ''}</div>
+            {book.genres && book.genres.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                {book.genres.slice(0, 2).map((g, i) => <GenrePill key={i} label={g} />)}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     // Shelf plank (defined outside ShelfRows so it's not re-created each render)
     const Plank = () => (
       <div style={{ position: 'relative', height: 11, background: '#221830', borderRadius: '0 0 4px 4px', boxShadow: '0 5px 12px rgba(0,0,0,.45)' }}>
@@ -622,7 +653,9 @@
                   {want.length === 0 ? emptyMsg('your tbr is empty \u2014 for now') : (
                     <>
                       <SortBar value={sortWant} onChange={setSortWant} accent="#e8c07a" />
-                      <AuthorShelfGroup books={want} onBookClick={setDetail} sortKey={sortWant} accent="#e8c07a" />
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {want.map(b => <WantCard key={b.id} book={b} onClick={setDetail} />)}
+                      </div>
                     </>
                   )}
                 </section>
