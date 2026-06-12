@@ -650,7 +650,7 @@
                   {want.length === 0 ? emptyMsg('your tbr is empty \u2014 for now') : (
                     <>
                       <SortBar value={sortWant} onChange={setSortWant} accent="#e8c07a" />
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px 12px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '16px 12px' }}>
                         {want.map(b => <WantCard key={b.id} book={b} onClick={setDetail} />)}
                       </div>
                     </>
